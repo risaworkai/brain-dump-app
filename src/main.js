@@ -83,14 +83,15 @@ async function establishSession(authData, email, password) {
 /** 保存・一覧前にセッション付きユーザーを取得（RLS 用 JWT 必須） */
 async function requireAuthUser() {
   if (!supabase) return { user: null, session: null, error: new Error('Supabase に未接続') };
-  const { data: { session }, error: sessionErr } = await supabase.auth.getSession();
-  if (sessionErr) return { user: null, session: null, error: sessionErr };
-  if (session?.user) return { user: session.user, session, error: null };
-  if (session?.refresh_token) {
-    const { data: refreshed, error: refreshErr } = await supabase.auth.refreshSession();
-    if (!refreshErr && refreshed.session?.user) {
-      return { user: refreshed.session.user, session: refreshed.session, error: null };
-    }
+  for (let i = 0; i < 3; i++) {
+    const { data: { session }, error: sessionErr } = await supabase.auth.getSession();
+    if (sessionErr) return { user: null, session: null, error: sessionErr };
+    if (session?.user) return { user: session.user, session, error: null };
+    if (i < 2) await new Promise((r) => setTimeout(r, 200));
+  }
+  const { data: refreshed, error: refreshErr } = await supabase.auth.refreshSession();
+  if (!refreshErr && refreshed.session?.user) {
+    return { user: refreshed.session.user, session: refreshed.session, error: null };
   }
   return {
     user: null,
@@ -180,11 +181,9 @@ function dbErrorHint(table, error) {
 /** INSERT 前にセッションを更新し、RLS 拒否時は1回リトライ */
 async function insertThoughtEntry(payload, userId) {
   const row = { ...payload, user_id: userId };
-  const attempt = () => supabase.from('thought_entries').insert(row);
-  let { error } = await attempt();
+  let { error } = await supabase.from('thought_entries').insert(row);
   if (error && /row-level security|violates.*policy/i.test(error.message)) {
-    await supabase.auth.refreshSession();
-    ({ error } = await attempt());
+    ({ error } = await supabase.from('thought_entries').insert(row));
   }
   return { error };
 }
@@ -620,6 +619,7 @@ form.addEventListener('submit', async (e) => {
   }
   submitBtn.disabled = true;
   submitBtn.textContent = '保存中…';
+  listStatus.textContent = '保存中…';
   try {
     const { user, error: authError } = await requireAuthUser();
     if (authError || !user) {
@@ -659,6 +659,7 @@ form.addEventListener('submit', async (e) => {
         hint = CATEGORY_MIGRATION_HINT;
       }
       showToast(`保存に失敗: ${error.message}${hint}`, 'err');
+      listStatus.textContent = `保存に失敗: ${error.message}`;
     } else {
       showToast(id ? '更新しました。' : '保存しました。');
       resetForm();
@@ -667,6 +668,7 @@ form.addEventListener('submit', async (e) => {
   } catch (err) {
     console.error(err);
     showToast(`保存に失敗: ${err.message}`, 'err');
+    listStatus.textContent = `保存に失敗: ${err.message}`;
   } finally {
     submitBtn.disabled = false;
     submitBtn.textContent = editIdInput.value.trim() ? '更新する' : '保存（新規）';
