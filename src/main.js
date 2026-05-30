@@ -80,6 +80,24 @@ async function establishSession(authData, email, password) {
   return data.session;
 }
 
+/** 保存・一覧前にセッション付きユーザーを取得（RLS 用 JWT 必須） */
+async function requireAuthUser() {
+  if (!supabase) return { user: null, error: new Error('Supabase に未接続') };
+  let { data: { session }, error: sessionErr } = await supabase.auth.getSession();
+  if (sessionErr) return { user: null, error: sessionErr };
+  if (!session?.access_token) {
+    const { data: refreshed, error: refreshErr } = await supabase.auth.refreshSession();
+    if (refreshErr) return { user: null, error: refreshErr };
+    session = refreshed.session;
+  }
+  if (session?.user) return { user: session.user, session, error: null };
+  const { data: { user }, error: userErr } = await supabase.auth.getUser();
+  if (userErr || !user) {
+    return { user: null, error: userErr || new Error('ログインが必要です') };
+  }
+  return { user, session: null, error: null };
+}
+
 const THEME_STORAGE_KEY = 'brain-dump-theme';
 
 function applyTheme(theme) {
@@ -143,6 +161,22 @@ let categoryById = new Map();
 
 const CATEGORY_MIGRATION_HINT =
   ' Supabase で docs/20260530_01_categories.sql を実行してください。';
+
+function userIdMigrationHint(table, error) {
+  if (!error?.message || !/user_id|column/i.test(error.message)) return '';
+  return ' Supabase で docs/20260530_02_user_id.sql を実行してください。';
+}
+
+function dbErrorHint(table, error) {
+  let hint = userIdMigrationHint(table, error);
+  if (!hint && /row-level security|violates.*policy/i.test(error?.message || '')) {
+    hint =
+      ' ログイン中のユーザーで保存してください。新規登録直後はログアウト→再ログイン、または Ctrl+Shift+R で再読み込みしてください。';
+  }
+  return hint;
+}
+
+let currentUserId = null;
 
 function showToast(message, variant = 'ok') {
   toastEl.textContent = message;
@@ -345,14 +379,18 @@ async function toggleDone(row, checked, checkboxEl) {
     table === 'thought_entries'
       ? { is_done: checked, updated_at: new Date().toISOString() }
       : { is_done: checked };
-  const { error } = await supabase.from(table).update(patch).eq('id', row.id);
+  const { error } = await supabase
+    .from(table)
+    .update(patch)
+    .eq('id', row.id)
+    .eq('user_id', currentUserId);
   checkboxEl.disabled = false;
   if (error) {
     checkboxEl.checked = !checked;
-    const hint =
-      table === 'brain_dumps' && /is_done|column/i.test(error.message)
-        ? ' Supabase で docs/add_is_done_brain_dumps.sql を実行してください。'
-        : '';
+    let hint = userIdMigrationHint(table, error);
+    if (!hint && table === 'brain_dumps' && /is_done|column/i.test(error.message)) {
+      hint = ' Supabase で docs/add_is_done_brain_dumps.sql を実行してください。';
+    }
     showToast(`更新に失敗: ${error.message}${hint}`, 'err');
     return;
   }
@@ -478,9 +516,15 @@ function renderList(rows) {
     delBtn.textContent = '削除';
     delBtn.addEventListener('click', async () => {
       if (!window.confirm('削除しますか？')) return;
-      const { error } = await supabase.from(entryTable(row)).delete().eq('id', row.id);
-      if (error) showToast(`削除に失敗: ${error.message}`, 'err');
-      else await loadEntries();
+      const { error } = await supabase
+        .from(entryTable(row))
+        .delete()
+        .eq('id', row.id)
+        .eq('user_id', currentUserId);
+      if (error) {
+        const hint = userIdMigrationHint(entryTable(row), error);
+        showToast(`削除に失敗: ${error.message}${hint}`, 'err');
+      } else await loadEntries();
     });
     actions.append(editBtn, delBtn);
     li.append(actions);
@@ -492,18 +536,45 @@ function renderList(rows) {
 async function loadEntries() {
   if (!supabase) return;
   listStatus.textContent = '読み込み中…';
+  const { user, error: authError } = await requireAuthUser();
+  if (authError) {
+    listStatus.textContent = '認証エラー';
+    showToast(`認証エラー: ${authError.message}`, 'err');
+    return;
+  }
+  if (!user) {
+    listStatus.textContent = 'ログインが必要です';
+    return;
+  }
+  currentUserId = user.id;
   const [teRes, bdRes] = await Promise.all([
-    supabase.from('thought_entries').select('*').order('created_at', { ascending: false }),
-    supabase.from('brain_dumps').select('*').order('created_at', { ascending: false }),
+    supabase
+      .from('thought_entries')
+      .select('*')
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false }),
+    supabase
+      .from('brain_dumps')
+      .select('*')
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false }),
   ]);
   if (teRes.error) {
+    const hint = userIdMigrationHint('thought_entries', teRes.error);
     listStatus.textContent = `一覧取得に失敗: ${teRes.error.message}`;
-    showToast(`一覧取得に失敗: ${teRes.error.message}`, 'err');
+    showToast(`一覧取得に失敗: ${teRes.error.message}${hint}`, 'err');
     return;
   }
   const thoughtRows = (Array.isArray(teRes.data) ? teRes.data : []).map(normalizeRow);
-  const legacyRows =
-    bdRes.error || !Array.isArray(bdRes.data) ? [] : bdRes.data.map(normalizeLegacyRow);
+  let legacyRows = [];
+  if (bdRes.error) {
+    if (!/relation|does not exist/i.test(bdRes.error.message)) {
+      const hint = userIdMigrationHint('brain_dumps', bdRes.error);
+      showToast(`旧データ取得に失敗: ${bdRes.error.message}${hint}`, 'err');
+    }
+  } else {
+    legacyRows = (Array.isArray(bdRes.data) ? bdRes.data : []).map(normalizeLegacyRow);
+  }
   supportsIsDone = true;
   entriesCache = [...thoughtRows, ...legacyRows].sort(
     (a, b) => new Date(b.created_at) - new Date(a.created_at)
@@ -519,6 +590,17 @@ async function reloadData() {
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
   if (!supabase) return;
+  const { user, error: authError } = await requireAuthUser();
+  if (authError || !user) {
+    showToast(
+      authError?.message
+        ? `認証エラー: ${authError.message}`
+        : 'ログインが必要です。再度ログインしてください。',
+      'err'
+    );
+    return;
+  }
+  currentUserId = user.id;
   const payload = {
     record_type: recordTypeEl.value,
     title: titleEl.value.trim() || null,
@@ -539,22 +621,35 @@ form.addEventListener('submit', async (e) => {
     ({ error } = await supabase
       .from('brain_dumps')
       .update({ title: payload.title || '（タイトルなし）', content: payload.content })
-      .eq('id', id));
+      .eq('id', id)
+      .eq('user_id', currentUserId));
   } else if (id) {
     const { category_id, ...rest } = payload;
     ({ error } = await supabase
       .from('thought_entries')
       .update({ ...rest, category_id, updated_at: new Date().toISOString() })
-      .eq('id', id));
+      .eq('id', id)
+      .eq('user_id', currentUserId));
   } else {
-    ({ error } = await supabase.from('thought_entries').insert(payload));
+    const { data: inserted, error: insertError } = await supabase
+      .from('thought_entries')
+      .insert({ ...payload, user_id: user.id })
+      .select('id, user_id')
+      .single();
+    error = insertError;
+    if (!error && inserted?.user_id !== user.id) {
+      error = {
+        message:
+          'user_id が保存されませんでした。Ctrl+Shift+R で再読み込みするか、GitHub Pages を使っている場合は最新版を push してください。',
+      };
+    }
   }
   submitBtn.disabled = false;
   if (error) {
-    let hint = '';
-    if (/due_date|due_at/i.test(error.message) && !/category/i.test(error.message)) {
+    let hint = dbErrorHint(id ? source : 'thought_entries', error);
+    if (!hint && /due_date|due_at/i.test(error.message) && !/category/i.test(error.message)) {
       hint = ' Supabase で docs/add_due_date_thought_entries.sql を実行してください。';
-    } else if (/category_id|categories|category/i.test(error.message)) {
+    } else if (!hint && /category_id|categories|category/i.test(error.message)) {
       hint = CATEGORY_MIGRATION_HINT;
     }
     showToast(`保存に失敗: ${error.message}${hint}`, 'err');
@@ -589,6 +684,8 @@ function validateAuthEmail(email) {
 }
 
 function showAuthView() {
+  currentUserId = null;
+  entriesCache = [];
   authSection?.classList.remove('hidden');
   appMain?.classList.add('hidden');
   userEmailEl?.classList.add('hidden');
@@ -605,7 +702,13 @@ function showAppView(session) {
 }
 
 async function onAuthenticated(session) {
-  showAppView(session);
+  const { user, error } = await requireAuthUser();
+  currentUserId = user?.id || session?.user?.id || null;
+  if (!currentUserId) {
+    if (error) showToast(`認証エラー: ${error.message}`, 'err');
+    return;
+  }
+  showAppView(session || { user });
   await reloadData();
 }
 
@@ -631,9 +734,7 @@ loginForm?.addEventListener('submit', async (e) => {
     const session = await establishSession(data, email, password);
     if (!session) {
       alert('ログインに失敗しました: セッションを取得できませんでした。');
-      return;
     }
-    await onAuthenticated(session);
   } catch (err) {
     alert(`ログインに失敗しました: ${err.message}`);
   }
@@ -664,9 +765,7 @@ signupForm?.addEventListener('submit', async (e) => {
     const session = await establishSession(data, email, password);
     if (!session) {
       alert('新規登録に失敗しました: セッションを取得できませんでした。');
-      return;
     }
-    await onAuthenticated(session);
   } catch (err) {
     alert(`新規登録に失敗しました: ${err.message}`);
   }
@@ -697,9 +796,14 @@ async function init() {
   }
   envWarning.classList.add('hidden');
   supabase = client;
-  const { data: { session } } = await supabase.auth.getSession();
-  if (session) await onAuthenticated(session);
-  else showAuthView();
+  supabase.auth.onAuthStateChange(async (event, session) => {
+    if (event === 'INITIAL_SESSION' || event === 'SIGNED_IN') {
+      if (session?.user) await onAuthenticated(session);
+      else if (event === 'INITIAL_SESSION') showAuthView();
+    } else if (event === 'SIGNED_OUT') {
+      showAuthView();
+    }
+  });
 }
 
 async function boot() {
