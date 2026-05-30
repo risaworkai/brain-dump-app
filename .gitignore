@@ -1,0 +1,9 @@
+# 秘密情報
+.env.local
+.env
+
+# Mac のゴミファイル
+.DS_Store
+
+# Node.js（今後使う場合に備えて）
+node_modules/

@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ブレインダンプ</title>
+    <link rel="stylesheet" href="src/style.css" />
+    <script>
+      (function () {
+        var t = localStorage.getItem("brain-dump-theme");
+        document.documentElement.setAttribute("data-theme", t === "light" ? "light" : "dark");
+      })();
+    </script>
+  </head>
+  <body>
+    <div class="app">
+      <header class="header">
+        <div class="header__row">
+          <h1>ブレインダンプ</h1>
+          <label class="theme-picker">
+            テーマ
+            <select id="theme-select" aria-label="表示テーマ">
+              <option value="dark">ダーク</option>
+              <option value="light">ライト</option>
+            </select>
+          </label>
+        </div>
+      </header>
+
+      <div id="env-warning" class="banner banner--warn hidden" role="alert"></div>
+      <div id="toast" class="toast hidden" role="status"></div>
+
+      <main class="layout">
+        <section class="panel" aria-labelledby="form-heading">
+          <h2 id="form-heading">登録・編集</h2>
+          <form id="entry-form" class="form">
+            <input type="hidden" id="edit-id" value="" />
+            <input type="hidden" id="edit-source" value="" />
+            <div class="field">
+              <label for="record-type">種別</label>
+              <select id="record-type" required>
+                <option value="idea">思いつき</option>
+                <option value="ai_consult">AI相談</option>
+                <option value="prompt">プロンプト</option>
+                <option value="learning">学習メモ</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="title">タイトル（任意）</label>
+              <input id="title" type="text" placeholder="短い見出し" />
+            </div>
+            <div class="field">
+              <label for="due-date">期限（任意）</label>
+              <input id="due-date" type="date" />
+            </div>
+            <div class="field" id="category-field">
+              <label for="category-id">カテゴリ（任意）</label>
+              <select id="category-id" aria-label="カテゴリ">
+                <option value="">（未選択）</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="content">本文 <span class="req">必須</span></label>
+              <textarea id="content" required rows="8" placeholder="メモ本文"></textarea>
+            </div>
+            <div class="field">
+              <label for="tags">タグ（カンマ区切り）</label>
+              <input id="tags" type="text" placeholder="例: メモ, 仕様" />
+            </div>
+            <div class="actions">
+              <button type="submit" id="submit-btn" class="btn btn--primary">保存（新規）</button>
+              <button type="button" id="cancel-edit" class="btn btn--ghost hidden">編集をやめる</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="panel" aria-labelledby="list-heading">
+          <div class="panel__head">
+            <h2 id="list-heading">保存済み一覧</h2>
+            <button type="button" id="refresh-btn" class="btn btn--ghost">再読み込み</button>
+          </div>
+          <div class="filters">
+            <select id="filter-type" aria-label="種別">
+              <option value="" selected>すべての種別</option>
+              <option value="idea">思いつき</option>
+              <option value="ai_consult">AI相談</option>
+              <option value="prompt">プロンプト</option>
+              <option value="learning">学習メモ</option>
+            </select>
+            <input id="filter-q" type="search" placeholder="キーワード" aria-label="検索" />
+          </div>
+          <p id="list-status" class="list-status"></p>
+          <ul id="entry-list" class="entry-list"></ul>
+        </section>
+      </main>
+    </div>
+    <script type="module" src="src/main.js"></script>
+  </body>
+</html>

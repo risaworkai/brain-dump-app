@@ -1,0 +1,54 @@
+【ブレインダンプ — これだけ守ればエラーが減ります】
+
+■ 正しい起動（毎回これ）
+
+1. フォルダを開く（例: D:\brain-dump-app）
+2. index.html はダブルクリックしない
+3. 起動.bat をダブルクリック
+4. 黒い窓に「Supabase: 設定 OK」と出ることを確認
+5. ブラウザで http://127.0.0.1:5174/ を開く
+6. ページを Ctrl+Shift+R で再読み込み
+
+■ .env.local の作り方
+
+1. Supabase → Project Settings → API
+2. 次の2つをコピー
+   - Project URL  → VITE_SUPABASE_URL=
+   - anon public  → VITE_SUPABASE_ANON_KEY=
+3. .env.local に次の形で2行だけ（行頭にスペースなし）
+
+   VITE_SUPABASE_URL=https://xxxx.supabase.co
+   VITE_SUPABASE_ANON_KEY=eyJhbGciOi...
+
+4. メモ帳で保存するとき「UTF-8」を選ぶ（UTF-16 だと読めません）
+
+■ よく出るエラーと対処
+
+【Supabase の設定がありません】
+→ 起動.bat を「.env.local がある同じフォルダ」から実行し直す
+→ 黒い窓に「設定 OK」が出るか確認。出ないなら .env.local の中身を見直す
+→ 別の場所で動いている古い node を止めるため、起動.bat が自動でポートを空けます
+
+【データが出ない】
+→ thought_entries と brain_dumps の両方を読みます
+→ 旧データには「旧データ」バッジが付きます
+
+【期限が一覧に出ない】
+→ Supabase SQL Editor に docs/add_due_date_thought_entries.sql の
+  「中身だけ」を貼って実行（ファイル名 docs/... は入力しない）
+→ 期限を入れて保存し直す
+
+【画面のテーマ】
+→ 右上の「テーマ」でダーク / ライトを切り替え（次回も記憶されます）
+
+【ポート 5174 が使用中】
+→ 起動.bat をもう一度実行（古いサーバーを止めてから起動）
+→ それでもダメなら黒い窓を全部閉じてから起動.bat
+
+【file:// では使えません】
+→ index のダブルクリックではなく http://127.0.0.1:5174/ を開く
+
+■ フォルダが2つある場合
+
+使うのは D:\brain-dump-app など「起動.bat がある1つ」だけにしてください。
+.env.local もそのフォルダに置きます。

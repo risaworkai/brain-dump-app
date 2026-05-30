@@ -1,0 +1,14 @@
+@docs/ の仕様書（要求仕様書・DB仕様書・画面仕様書・機能仕様書）を
+すべて読んで、仕様を把握してから実装してください。
+
+brain_dumps テーブルに対して CRUD が全部動く
+index.html を1ファイルで作って。
+
+条件：
+- HTML + JavaScript（フレームワークなし）
+- SUPABASE_URL と SUPABASE_ANON_KEY は JavaScript の先頭に
+  const で直接書いて（.env.local や process.env は使わない）
+- supabase-js を CDN で読み込む
+- RLS は OFF のまま進める
+- 画面構成・機能は画面仕様書・機能仕様書に従う
+- 一覧の各行に「編集」「削除」ボタンをつける
