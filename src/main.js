@@ -52,12 +52,23 @@ async function getSupabaseCredentials() {
   return { url: '', key: '' };
 }
 
+/** PC（127.0.0.1）では拡張機能回避のため同一オリジン proxy 経由 */
+function getSupabaseClientUrl(apiUrl) {
+  if (typeof location === 'undefined') return apiUrl;
+  const h = location.hostname;
+  if (h === '127.0.0.1' || h === 'localhost') {
+    return `${location.origin}/sb`;
+  }
+  return apiUrl;
+}
+
 async function bootSupabase() {
   const [{ url, key }, createClient] = await Promise.all([
     getSupabaseCredentials(),
     loadCreateClient(),
   ]);
   if (!url || !key) return { supabase: null, url, key };
+  const clientUrl = getSupabaseClientUrl(url);
   const fetchWithTimeout = (input, init = {}) => {
     const ms = 8000;
     const controller = new AbortController();
@@ -65,7 +76,7 @@ async function bootSupabase() {
     return fetch(input, { ...init, signal: controller.signal }).finally(() => clearTimeout(timer));
   };
   return {
-    supabase: createClient(url, key, {
+    supabase: createClient(clientUrl, key, {
       auth: {
         persistSession: true,
         autoRefreshToken: true,
@@ -191,10 +202,13 @@ function dbErrorHint(table, error) {
 
 function showExtensionBlockHint() {
   envWarning.classList.remove('hidden');
-  envWarning.innerHTML =
-    '<strong>保存が通信エラーで止まる場合</strong><br>' +
-    'ブラウザ拡張（広告ブロック・DeepL 等）が Supabase をブロックしている可能性があります。<br>' +
-    '対処: <strong>Ctrl+Shift+N</strong> のシークレットウィンドウで開く、または拡張機能をこのサイトでオフにしてください。';
+  const onPc = typeof location !== 'undefined' && /^(127\.0\.0\.1|localhost)$/.test(location.hostname);
+  envWarning.innerHTML = onPc
+    ? '<strong>保存が通信エラーで止まる場合</strong><br>起動.bat で開いているか確認し、ページを Ctrl+Shift+R で再読み込みしてください。'
+    : '<strong>保存が通信エラーで止まる場合</strong><br>' +
+      '① <strong>Ctrl+Shift+N</strong> のシークレットウィンドウで開く（いちばん確実）<br>' +
+      '② 広告ブロック・DeepL 等の拡張機能をこのサイトでオフ<br>' +
+      '③ PC なら <code>起動.bat</code> → http://127.0.0.1:5174/ を使う';
 }
 
 function normalizeSaveError(error) {

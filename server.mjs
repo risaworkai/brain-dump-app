@@ -71,6 +71,46 @@ function getSupabaseEnv() {
   };
 }
 
+async function readRequestBody(req) {
+  const chunks = [];
+  for await (const chunk of req) chunks.push(chunk);
+  return Buffer.concat(chunks);
+}
+
+async function proxySupabase(req, res) {
+  const { url: supabaseUrl } = getSupabaseEnv();
+  if (!supabaseUrl) {
+    res.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('Supabase URL not configured');
+    return;
+  }
+  const reqUrl = req.url || '/';
+  const subPath = reqUrl.replace(/^\/sb/, '') || '/';
+  const targetUrl = supabaseUrl.replace(/\/$/, '') + subPath;
+  try {
+    const body = ['GET', 'HEAD'].includes(req.method || 'GET') ? undefined : await readRequestBody(req);
+    const headers = {};
+    for (const [k, v] of Object.entries(req.headers)) {
+      const key = k.toLowerCase();
+      if (key === 'host' || key === 'connection' || key === 'content-length') continue;
+      if (v !== undefined) headers[k] = v;
+    }
+    const upstream = await fetch(targetUrl, { method: req.method, headers, body });
+    const outHeaders = {};
+    upstream.headers.forEach((v, k) => {
+      const key = k.toLowerCase();
+      if (key === 'transfer-encoding') return;
+      outHeaders[k] = v;
+    });
+    res.writeHead(upstream.status, outHeaders);
+    res.end(Buffer.from(await upstream.arrayBuffer()));
+  } catch (err) {
+    console.error('Supabase proxy error:', err.message);
+    res.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end(`Proxy error: ${err.message}`);
+  }
+}
+
 const server = http.createServer((req, res) => {
   const urlPath = (req.url || '/').split('?')[0];
 
@@ -97,6 +137,11 @@ const server = http.createServer((req, res) => {
         supabaseConfigured: !!(url && key),
       })
     );
+    return;
+  }
+
+  if (urlPath.startsWith('/sb/') || urlPath === '/sb') {
+    proxySupabase(req, res);
     return;
   }
 
