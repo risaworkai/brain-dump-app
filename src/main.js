@@ -85,12 +85,10 @@ async function requireAuthUser() {
   if (!supabase) return { user: null, session: null, error: new Error('Supabase に未接続') };
   const { data: { session }, error: sessionErr } = await supabase.auth.getSession();
   if (sessionErr) return { user: null, session: null, error: sessionErr };
-  if (session?.access_token && session.user) {
-    return { user: session.user, session, error: null };
-  }
+  if (session?.user) return { user: session.user, session, error: null };
   if (session?.refresh_token) {
     const { data: refreshed, error: refreshErr } = await supabase.auth.refreshSession();
-    if (!refreshErr && refreshed.session?.access_token && refreshed.session.user) {
+    if (!refreshErr && refreshed.session?.user) {
       return { user: refreshed.session.user, session: refreshed.session, error: null };
     }
   }
@@ -604,19 +602,10 @@ async function reloadData() {
 
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
-  if (!supabase) return;
-  const { user, error: authError } = await requireAuthUser();
-  if (authError || !user) {
-    showToast(
-      authError?.message
-        ? `認証エラー: ${authError.message}`
-        : 'ログインが必要です。再度ログインしてください。',
-      'err'
-    );
+  if (!supabase) {
+    showToast('Supabase に接続できません。ページを再読み込みしてください。', 'err');
     return;
   }
-  await supabase.auth.refreshSession();
-  currentUserId = user.id;
   const payload = {
     record_type: recordTypeEl.value,
     title: titleEl.value.trim() || null,
@@ -630,39 +619,57 @@ form.addEventListener('submit', async (e) => {
     return;
   }
   submitBtn.disabled = true;
-  const id = editIdInput.value.trim();
-  const source = editSourceInput.value.trim() || 'thought_entries';
-  let error;
-  if (id && source === 'brain_dumps') {
-    ({ error } = await supabase
-      .from('brain_dumps')
-      .update({ title: payload.title || '（タイトルなし）', content: payload.content })
-      .eq('id', id)
-      .eq('user_id', currentUserId));
-  } else if (id) {
-    const { category_id, ...rest } = payload;
-    ({ error } = await supabase
-      .from('thought_entries')
-      .update({ ...rest, category_id, updated_at: new Date().toISOString() })
-      .eq('id', id)
-      .eq('user_id', currentUserId));
-  } else {
-    ({ error } = await insertThoughtEntry(payload, user.id));
-  }
-  submitBtn.disabled = false;
-  if (error) {
-    let hint = dbErrorHint(id ? source : 'thought_entries', error);
-    if (!hint && /due_date|due_at/i.test(error.message) && !/category/i.test(error.message)) {
-      hint = ' Supabase で docs/add_due_date_thought_entries.sql を実行してください。';
-    } else if (!hint && /category_id|categories|category/i.test(error.message)) {
-      hint = CATEGORY_MIGRATION_HINT;
+  submitBtn.textContent = '保存中…';
+  try {
+    const { user, error: authError } = await requireAuthUser();
+    if (authError || !user) {
+      showToast(
+        authError?.message
+          ? `認証エラー: ${authError.message}`
+          : 'ログインが必要です。再度ログインしてください。',
+        'err'
+      );
+      return;
     }
-    showToast(`保存に失敗: ${error.message}${hint}`, 'err');
-  }
-  else {
-    showToast(id ? '更新しました。' : '保存しました。');
-    resetForm();
-    await reloadData();
+    currentUserId = user.id;
+    const id = editIdInput.value.trim();
+    const source = editSourceInput.value.trim() || 'thought_entries';
+    let error;
+    if (id && source === 'brain_dumps') {
+      ({ error } = await supabase
+        .from('brain_dumps')
+        .update({ title: payload.title || '（タイトルなし）', content: payload.content })
+        .eq('id', id)
+        .eq('user_id', currentUserId));
+    } else if (id) {
+      const { category_id, ...rest } = payload;
+      ({ error } = await supabase
+        .from('thought_entries')
+        .update({ ...rest, category_id, updated_at: new Date().toISOString() })
+        .eq('id', id)
+        .eq('user_id', currentUserId));
+    } else {
+      ({ error } = await insertThoughtEntry(payload, user.id));
+    }
+    if (error) {
+      let hint = dbErrorHint(id ? source : 'thought_entries', error);
+      if (!hint && /due_date|due_at/i.test(error.message) && !/category/i.test(error.message)) {
+        hint = ' Supabase で docs/add_due_date_thought_entries.sql を実行してください。';
+      } else if (!hint && /category_id|categories|category/i.test(error.message)) {
+        hint = CATEGORY_MIGRATION_HINT;
+      }
+      showToast(`保存に失敗: ${error.message}${hint}`, 'err');
+    } else {
+      showToast(id ? '更新しました。' : '保存しました。');
+      resetForm();
+      await reloadData();
+    }
+  } catch (err) {
+    console.error(err);
+    showToast(`保存に失敗: ${err.message}`, 'err');
+  } finally {
+    submitBtn.disabled = false;
+    submitBtn.textContent = editIdInput.value.trim() ? '更新する' : '保存（新規）';
   }
 });
 
