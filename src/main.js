@@ -179,6 +179,18 @@ function dbErrorHint(table, error) {
   return hint;
 }
 
+/** INSERT 前にセッションを更新し、RLS 拒否時は1回リトライ */
+async function insertThoughtEntry(payload, userId) {
+  const row = { ...payload, user_id: userId };
+  const attempt = () => supabase.from('thought_entries').insert(row);
+  let { error } = await attempt();
+  if (error && /row-level security|violates.*policy/i.test(error.message)) {
+    await supabase.auth.refreshSession();
+    ({ error } = await attempt());
+  }
+  return { error };
+}
+
 let currentUserId = null;
 
 function showToast(message, variant = 'ok') {
@@ -603,6 +615,7 @@ form.addEventListener('submit', async (e) => {
     );
     return;
   }
+  await supabase.auth.refreshSession();
   currentUserId = user.id;
   const payload = {
     record_type: recordTypeEl.value,
@@ -634,9 +647,7 @@ form.addEventListener('submit', async (e) => {
       .eq('id', id)
       .eq('user_id', currentUserId));
   } else {
-    ({ error } = await supabase
-      .from('thought_entries')
-      .insert({ ...payload, user_id: user.id }));
+    ({ error } = await insertThoughtEntry(payload, user.id));
   }
   submitBtn.disabled = false;
   if (error) {
