@@ -58,6 +58,12 @@ async function bootSupabase() {
     loadCreateClient(),
   ]);
   if (!url || !key) return { supabase: null, url, key };
+  const fetchWithTimeout = (input, init = {}) => {
+    const ms = 12000;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), ms);
+    return fetch(input, { ...init, signal: controller.signal }).finally(() => clearTimeout(timer));
+  };
   return {
     supabase: createClient(url, key, {
       auth: {
@@ -65,6 +71,7 @@ async function bootSupabase() {
         autoRefreshToken: true,
         detectSessionInUrl: false,
       },
+      global: { fetch: fetchWithTimeout },
     }),
     url,
     key,
@@ -78,17 +85,6 @@ async function establishSession(authData, email, password) {
   const { data, error } = await supabase.auth.signInWithPassword({ email, password });
   if (error) throw error;
   return data.session;
-}
-
-function withTimeout(promise, ms, label) {
-  let timer;
-  const timeout = new Promise((_, reject) => {
-    timer = setTimeout(
-      () => reject(new Error(`${label}がタイムアウトしました（${ms / 1000}秒）。ネットワークを確認してください。`)),
-      ms
-    );
-  });
-  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
 /** 保存・一覧前にセッション付きユーザーを取得（RLS 用 JWT 必須） */
@@ -191,16 +187,22 @@ function dbErrorHint(table, error) {
     hint =
       ' Supabase で docs/20260530_06_user_id_insert_trigger.sql を実行し、ログアウト→再ログインしてください。';
   }
+  if (!hint && /abort|timeout|タイムアウト/i.test(error?.message || '')) {
+    hint =
+      ' 広告ブロック等をオフにするか、シークレットウィンドウで試してください。PC なら 起動.bat も試せます。';
+  }
   return hint;
 }
 
 /** INSERT 前にセッションを更新し、RLS 拒否時は1回リトライ */
 async function insertThoughtEntry(payload, userId) {
   const row = { ...payload, user_id: userId };
-  const attempt = () => supabase.from('thought_entries').insert(row);
-  let { error } = await withTimeout(attempt(), 15000, '保存');
+  let { error } = await supabase.from('thought_entries').insert(row);
   if (error && /row-level security|violates.*policy/i.test(error.message)) {
-    ({ error } = await withTimeout(attempt(), 15000, '保存'));
+    ({ error } = await supabase.from('thought_entries').insert(row));
+  }
+  if (error?.name === 'AbortError' || /abort/i.test(error?.message || '')) {
+    error = { message: 'Supabase への接続がタイムアウトしました。ネットワークまたは広告ブロックを確認してください。' };
   }
   return { error };
 }
