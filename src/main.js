@@ -80,23 +80,38 @@ async function establishSession(authData, email, password) {
   return data.session;
 }
 
+function withTimeout(promise, ms, label) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`${label}がタイムアウトしました（${ms / 1000}秒）。ネットワークを確認してください。`)),
+      ms
+    );
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 /** 保存・一覧前にセッション付きユーザーを取得（RLS 用 JWT 必須） */
 async function requireAuthUser() {
   if (!supabase) return { user: null, session: null, error: new Error('Supabase に未接続') };
+  if (authSessionCache?.user) {
+    return { user: authSessionCache.user, session: authSessionCache, error: null };
+  }
   for (let i = 0; i < 3; i++) {
     const { data: { session }, error: sessionErr } = await supabase.auth.getSession();
     if (sessionErr) return { user: null, session: null, error: sessionErr };
-    if (session?.user) return { user: session.user, session, error: null };
+    if (session?.user) {
+      authSessionCache = session;
+      return { user: session.user, session, error: null };
+    }
     if (i < 2) await new Promise((r) => setTimeout(r, 200));
   }
-  const { data: refreshed, error: refreshErr } = await supabase.auth.refreshSession();
-  if (!refreshErr && refreshed.session?.user) {
-    return { user: refreshed.session.user, session: refreshed.session, error: null };
-  }
+  const { data: { user }, error: userErr } = await supabase.auth.getUser();
+  if (!userErr && user) return { user, session: authSessionCache, error: null };
   return {
     user: null,
     session: null,
-    error: new Error('ログインセッションがありません。ログアウトして再ログインしてください。'),
+    error: userErr || new Error('ログインセッションがありません。ログアウトして再ログインしてください。'),
   };
 }
 
@@ -156,6 +171,7 @@ const loginBtn = document.getElementById('login-btn');
 const signupBtn = document.getElementById('signup-btn');
 
 let supabase = null;
+let authSessionCache = null;
 let entriesCache = [];
 let supportsIsDone = true;
 let categoriesCache = [];
@@ -181,9 +197,10 @@ function dbErrorHint(table, error) {
 /** INSERT 前にセッションを更新し、RLS 拒否時は1回リトライ */
 async function insertThoughtEntry(payload, userId) {
   const row = { ...payload, user_id: userId };
-  let { error } = await supabase.from('thought_entries').insert(row);
+  const attempt = () => supabase.from('thought_entries').insert(row);
+  let { error } = await withTimeout(attempt(), 15000, '保存');
   if (error && /row-level security|violates.*policy/i.test(error.message)) {
-    ({ error } = await supabase.from('thought_entries').insert(row));
+    ({ error } = await withTimeout(attempt(), 15000, '保存'));
   }
   return { error };
 }
@@ -663,7 +680,11 @@ form.addEventListener('submit', async (e) => {
     } else {
       showToast(id ? '更新しました。' : '保存しました。');
       resetForm();
-      await reloadData();
+      listStatus.textContent = '保存しました。一覧を更新中…';
+      reloadData().catch((err) => {
+        console.error(err);
+        listStatus.textContent = `一覧更新に失敗: ${err.message}`;
+      });
     }
   } catch (err) {
     console.error(err);
@@ -699,6 +720,7 @@ function validateAuthEmail(email) {
 
 function showAuthView() {
   currentUserId = null;
+  authSessionCache = null;
   entriesCache = [];
   authSection?.classList.remove('hidden');
   appMain?.classList.add('hidden');
@@ -717,9 +739,10 @@ function showAppView(session) {
 
 async function onAuthenticated(session) {
   if (session?.user?.id) {
+    authSessionCache = session;
     currentUserId = session.user.id;
     showAppView(session);
-    await reloadData();
+    reloadData().catch((err) => console.error(err));
     return;
   }
   const { user, error } = await requireAuthUser();
@@ -729,7 +752,7 @@ async function onAuthenticated(session) {
   }
   currentUserId = user.id;
   showAppView({ user });
-  await reloadData();
+  reloadData().catch((err) => console.error(err));
 }
 
 loginForm?.addEventListener('submit', async (e) => {
@@ -822,8 +845,10 @@ async function init() {
   supabase = client;
   supabase.auth.onAuthStateChange(async (event, session) => {
     if (event === 'INITIAL_SESSION' || event === 'SIGNED_IN') {
-      if (session?.user) await onAuthenticated(session);
-      else if (event === 'INITIAL_SESSION') showAuthView();
+      if (session?.user) {
+        authSessionCache = session;
+        await onAuthenticated(session);
+      } else if (event === 'INITIAL_SESSION') showAuthView();
     } else if (event === 'SIGNED_OUT') {
       showAuthView();
     }
