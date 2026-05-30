@@ -62,15 +62,21 @@ async function getSupabaseCredentials() {
     const k = String(e?.VITE_SUPABASE_ANON_KEY || '').trim();
     if (u && k) return { url: u, key: k };
   }
-  try {
-    const m = await import('/env.js');
-    return {
-      url: String(m.VITE_SUPABASE_URL || '').trim(),
-      key: String(m.VITE_SUPABASE_ANON_KEY || '').trim(),
-    };
-  } catch {
-    return { url: '', key: '' };
+  const sources = [
+    new URL('../env.js', import.meta.url).href,
+    '/env.js',
+  ];
+  for (const href of sources) {
+    try {
+      const m = await import(/* @vite-ignore */ href);
+      const u = String(m.VITE_SUPABASE_URL || '').trim();
+      const k = String(m.VITE_SUPABASE_ANON_KEY || '').trim();
+      if (u && k) return { url: u, key: k };
+    } catch {
+      /* 次のパスを試す */
+    }
   }
+  return { url: '', key: '' };
 }
 
 let url = '';
@@ -538,10 +544,9 @@ function init() {
     envWarning.classList.remove('hidden');
     envWarning.innerHTML =
       '<strong>Supabase の設定がありません。</strong><br>' +
-      '① <code>.env.local</code> を <strong>起動.bat と同じフォルダ</strong> に置く<br>' +
-      '② そのフォルダの <code>起動.bat</code> を実行し、黒い窓に <strong>Supabase: 設定 OK</strong> と出るか確認<br>' +
-      '③ ブラウザで <code>http://127.0.0.1:5174/</code> を開き <kbd>Ctrl+Shift+R</kbd> で再読み込み<br>' +
-      '<small>index.html のダブルクリック（file://）では動きません。</small>';
+      'PC: <code>.env.local</code> を置き <code>起動.bat</code> または <code>公開用-env更新.bat</code> で <code>env.js</code> を作る<br>' +
+      'GitHub Pages: リポジトリに <code>env.js</code> があるか確認（<code>公開用-env更新.bat</code> → push）<br>' +
+      '<small>index 直開き・GitHub の URL では <code>env.js</code> が必要です。</small>';
     listStatus.textContent = 'Supabase に接続できません。';
     return;
   }
@@ -550,17 +555,7 @@ function init() {
   reloadData();
 }
 
-function warnIfOpenedAsFile() {
-  if (location.protocol !== 'file:') return;
-  envWarning.classList.remove('hidden');
-  envWarning.innerHTML =
-    '<strong>file:// では使えません。</strong> 起動.bat を実行し、http://127.0.0.1:5174/ を開いてください。';
-  listStatus.textContent = '接続できません（file://）';
-}
-
 async function boot() {
-  warnIfOpenedAsFile();
-  if (location.protocol === 'file:') return;
   try {
     const [{ url: u, key: k }, clientFactory] = await Promise.all([
       getSupabaseCredentials(),

@@ -52,3 +52,23 @@
 
 使うのは D:\brain-dump-app など「起動.bat がある1つ」だけにしてください。
 .env.local もそのフォルダに置きます。
+
+■ 仮公開（みんなと同じ — GitHub Pages + index）
+
+※ anon キーは env.js に入り GitHub 上も見えます（研修の仮公開向け）。RLS オフのままです。
+
+1. 公開用-env更新.bat を実行 → env.js ができる
+2. git add env.js → commit → push
+3. GitHub のリポジトリ → Settings → Pages
+   - Source: Deploy from a branch
+   - Branch: main / (root)
+4. 1〜2分後、次の URL を開く（ユーザー名は自分のもの）
+   https://risaworkai.github.io/brain-dump-app/
+5. スマホも同じ URL をブックマーク
+
+index.html のダブルクリック（file://）でも env.js があれば動きます。
+PC でサーバー経由なら今まで通り 起動.bat でも OK。
+
+■ 仮公開（別案 — Netlify）
+
+GitHub Pages の代わりに Netlify も使えます（netlify.toml 参照）。

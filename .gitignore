@@ -1,6 +1,7 @@
-# 秘密情報
+# 秘密情報（ローカルだけ）
 .env.local
 .env
+# env.js は GitHub Pages 用にリポジトリへ入れる（仮公開・anon キー）
 
 # Mac のゴミファイル
 .DS_Store

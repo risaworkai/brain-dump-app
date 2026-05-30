@@ -1,0 +1,2 @@
+export const VITE_SUPABASE_URL="https://udnxdetrkmpmxcbdwyyu.supabase.co";
+export const VITE_SUPABASE_ANON_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVkbnhkZXRya21wbXhjYmR3eXl1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgzMzA3OTksImV4cCI6MjA5MzkwNjc5OX0.v2D8uxWLT_SW1BcpT_l2VZInuxw9o_63MPL-q03x60I";
