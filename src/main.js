@@ -69,12 +69,6 @@ async function bootSupabase() {
   ]);
   if (!url || !key) return { supabase: null, url, key };
   const clientUrl = getSupabaseClientUrl(url);
-  const fetchWithTimeout = (input, init = {}) => {
-    const ms = 8000;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), ms);
-    return fetch(input, { ...init, signal: controller.signal }).finally(() => clearTimeout(timer));
-  };
   return {
     supabase: createClient(clientUrl, key, {
       auth: {
@@ -82,7 +76,6 @@ async function bootSupabase() {
         autoRefreshToken: true,
         detectSessionInUrl: false,
       },
-      global: { fetch: fetchWithTimeout },
     }),
     url,
     key,
@@ -204,11 +197,38 @@ function showExtensionBlockHint() {
   envWarning.classList.remove('hidden');
   const onPc = typeof location !== 'undefined' && /^(127\.0\.0\.1|localhost)$/.test(location.hostname);
   envWarning.innerHTML = onPc
-    ? '<strong>保存が通信エラーで止まる場合</strong><br>起動.bat で開いているか確認し、ページを Ctrl+Shift+R で再読み込みしてください。'
-    : '<strong>保存が通信エラーで止まる場合</strong><br>' +
-      '① <strong>Ctrl+Shift+N</strong> のシークレットウィンドウで開く（いちばん確実）<br>' +
-      '② 広告ブロック・DeepL 等の拡張機能をこのサイトでオフ<br>' +
-      '③ PC なら <code>起動.bat</code> → http://127.0.0.1:5174/ を使う';
+    ? '<strong>Supabase に接続できません</strong><br>起動.bat の黒い窓が開いたままか確認し、Ctrl+Shift+R で再読み込みしてください。'
+    : '<strong>Supabase に接続できません</strong><br>' +
+      '① PC なら <code>起動.bat</code> → http://127.0.0.1:5174/<br>' +
+      '② 別ブラウザ（Edge 等）で試す<br>' +
+      '③ スマホのテザリング等、別ネットワークで試す';
+}
+
+async function testSupabaseConnection() {
+  if (!supabase) return;
+  try {
+    const { error } = await supabase.from('categories').select('id').limit(1);
+    if (error) {
+      envWarning.classList.remove('hidden');
+      envWarning.textContent = `Supabase 接続テスト失敗: ${error.message}`;
+    } else {
+      envWarning.classList.add('hidden');
+    }
+  } catch (err) {
+    showExtensionBlockHint();
+  }
+}
+
+function runWithDeadline(ms, fn) {
+  return Promise.race([
+    fn(),
+    new Promise((_, reject) => {
+      setTimeout(
+        () => reject(new Error(`処理がタイムアウトしました（${ms / 1000}秒）。別ブラウザか 起動.bat を試してください。`)),
+        ms
+      );
+    }),
+  ]);
 }
 
 function normalizeSaveError(error) {
@@ -663,54 +683,57 @@ form.addEventListener('submit', async (e) => {
   submitBtn.textContent = '保存中…';
   listStatus.textContent = '保存中…';
   try {
-    const { user, error: authError } = await requireAuthUser();
-    if (authError || !user) {
-      showToast(
-        authError?.message
-          ? `認証エラー: ${authError.message}`
-          : 'ログインが必要です。再度ログインしてください。',
-        'err'
-      );
-      return;
-    }
-    currentUserId = user.id;
-    const id = editIdInput.value.trim();
-    const source = editSourceInput.value.trim() || 'thought_entries';
-    let error;
-    if (id && source === 'brain_dumps') {
-      ({ error } = await supabase
-        .from('brain_dumps')
-        .update({ title: payload.title || '（タイトルなし）', content: payload.content })
-        .eq('id', id)
-        .eq('user_id', currentUserId));
-    } else if (id) {
-      const { category_id, ...rest } = payload;
-      ({ error } = await supabase
-        .from('thought_entries')
-        .update({ ...rest, category_id, updated_at: new Date().toISOString() })
-        .eq('id', id)
-        .eq('user_id', currentUserId));
-    } else {
-      ({ error } = await insertThoughtEntry(payload, user.id));
-    }
-    if (error) {
-      let hint = dbErrorHint(id ? source : 'thought_entries', error);
-      if (!hint && /due_date|due_at/i.test(error.message) && !/category/i.test(error.message)) {
-        hint = ' Supabase で docs/add_due_date_thought_entries.sql を実行してください。';
-      } else if (!hint && /category_id|categories|category/i.test(error.message)) {
-        hint = CATEGORY_MIGRATION_HINT;
+    await runWithDeadline(20000, async () => {
+      const { user, error: authError } = await requireAuthUser();
+      if (authError || !user) {
+        showToast(
+          authError?.message
+            ? `認証エラー: ${authError.message}`
+            : 'ログインが必要です。再度ログインしてください。',
+          'err'
+        );
+        listStatus.textContent = 'ログインが必要です';
+        return;
       }
-      showToast(`保存に失敗: ${error.message}${hint}`, 'err');
-      listStatus.textContent = `保存に失敗: ${error.message}`;
-    } else {
-      showToast(id ? '更新しました。' : '保存しました。');
-      resetForm();
-      listStatus.textContent = '保存しました。一覧を更新中…';
-      reloadData().catch((err) => {
-        console.error(err);
-        listStatus.textContent = `一覧更新に失敗: ${err.message}`;
-      });
-    }
+      currentUserId = user.id;
+      const id = editIdInput.value.trim();
+      const source = editSourceInput.value.trim() || 'thought_entries';
+      let error;
+      if (id && source === 'brain_dumps') {
+        ({ error } = await supabase
+          .from('brain_dumps')
+          .update({ title: payload.title || '（タイトルなし）', content: payload.content })
+          .eq('id', id)
+          .eq('user_id', currentUserId));
+      } else if (id) {
+        const { category_id, ...rest } = payload;
+        ({ error } = await supabase
+          .from('thought_entries')
+          .update({ ...rest, category_id, updated_at: new Date().toISOString() })
+          .eq('id', id)
+          .eq('user_id', currentUserId));
+      } else {
+        ({ error } = await insertThoughtEntry(payload, user.id));
+      }
+      if (error) {
+        let hint = dbErrorHint(id ? source : 'thought_entries', error);
+        if (!hint && /due_date|due_at/i.test(error.message) && !/category/i.test(error.message)) {
+          hint = ' Supabase で docs/add_due_date_thought_entries.sql を実行してください。';
+        } else if (!hint && /category_id|categories|category/i.test(error.message)) {
+          hint = CATEGORY_MIGRATION_HINT;
+        }
+        showToast(`保存に失敗: ${error.message}${hint}`, 'err');
+        listStatus.textContent = `保存に失敗: ${error.message}`;
+      } else {
+        showToast(id ? '更新しました。' : '保存しました。');
+        resetForm();
+        listStatus.textContent = '保存しました。一覧を更新中…';
+        reloadData().catch((err) => {
+          console.error(err);
+          listStatus.textContent = `一覧更新に失敗: ${err.message}`;
+        });
+      }
+    });
   } catch (err) {
     console.error(err);
     const normalized = normalizeSaveError(err);
@@ -768,6 +791,7 @@ async function onAuthenticated(session) {
     authSessionCache = session;
     currentUserId = session.user.id;
     showAppView(session);
+    await testSupabaseConnection();
     reloadData().catch((err) => console.error(err));
     return;
   }
@@ -778,6 +802,7 @@ async function onAuthenticated(session) {
   }
   currentUserId = user.id;
   showAppView({ user });
+  await testSupabaseConnection();
   reloadData().catch((err) => console.error(err));
 }
 
