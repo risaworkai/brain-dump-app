@@ -52,14 +52,28 @@ async function getSupabaseCredentials() {
   return { url: '', key: '' };
 }
 
-/** PC（127.0.0.1）では拡張機能回避のため同一オリジン proxy 経由 */
-function getSupabaseClientUrl(apiUrl) {
+/** PC（127.0.0.1）では /sb proxy が使えるときだけ経由（古い server.mjs では直接接続） */
+async function resolveSupabaseClientUrl(apiUrl, anonKey) {
   if (typeof location === 'undefined') return apiUrl;
   const h = location.hostname;
-  if (h === '127.0.0.1' || h === 'localhost') {
-    return `${location.origin}/sb`;
+  if (h !== '127.0.0.1' && h !== 'localhost') return apiUrl;
+
+  const proxyBase = `${location.origin}/sb`;
+  try {
+    const health = await fetch(`${proxyBase}/auth/v1/health`, {
+      headers: { apikey: anonKey },
+    });
+    const text = await health.text();
+    if (health.status === 404 && text.trim() === 'Not Found') return apiUrl;
+    try {
+      JSON.parse(text);
+      return proxyBase;
+    } catch {
+      return apiUrl;
+    }
+  } catch {
+    return apiUrl;
   }
-  return apiUrl;
 }
 
 async function bootSupabase() {
@@ -68,7 +82,7 @@ async function bootSupabase() {
     loadCreateClient(),
   ]);
   if (!url || !key) return { supabase: null, url, key };
-  const clientUrl = getSupabaseClientUrl(url);
+  const clientUrl = await resolveSupabaseClientUrl(url, key);
   return {
     supabase: createClient(clientUrl, key, {
       auth: {

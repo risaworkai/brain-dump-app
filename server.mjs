@@ -135,6 +135,7 @@ const server = http.createServer((req, res) => {
         ok: !!(url && key),
         folder: __dirname,
         supabaseConfigured: !!(url && key),
+        supabaseProxy: true,
       })
     );
     return;
