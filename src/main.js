@@ -83,14 +83,15 @@ async function establishSession(authData, email, password) {
 /** 保存・一覧前にセッション付きユーザーを取得（RLS 用 JWT 必須） */
 async function requireAuthUser() {
   if (!supabase) return { user: null, error: new Error('Supabase に未接続') };
-  let { data: { session }, error: sessionErr } = await supabase.auth.getSession();
+  const { data: { session }, error: sessionErr } = await supabase.auth.getSession();
   if (sessionErr) return { user: null, error: sessionErr };
-  if (!session?.access_token) {
-    const { data: refreshed, error: refreshErr } = await supabase.auth.refreshSession();
-    if (refreshErr) return { user: null, error: refreshErr };
-    session = refreshed.session;
-  }
   if (session?.user) return { user: session.user, session, error: null };
+  if (session?.refresh_token) {
+    const { data: refreshed, error: refreshErr } = await supabase.auth.refreshSession();
+    if (!refreshErr && refreshed.session?.user) {
+      return { user: refreshed.session.user, session: refreshed.session, error: null };
+    }
+  }
   const { data: { user }, error: userErr } = await supabase.auth.getUser();
   if (userErr || !user) {
     return { user: null, error: userErr || new Error('ログインが必要です') };
@@ -702,13 +703,19 @@ function showAppView(session) {
 }
 
 async function onAuthenticated(session) {
+  if (session?.user?.id) {
+    currentUserId = session.user.id;
+    showAppView(session);
+    await reloadData();
+    return;
+  }
   const { user, error } = await requireAuthUser();
-  currentUserId = user?.id || session?.user?.id || null;
-  if (!currentUserId) {
+  if (!user?.id) {
     if (error) showToast(`認証エラー: ${error.message}`, 'err');
     return;
   }
-  showAppView(session || { user });
+  currentUserId = user.id;
+  showAppView({ user });
   await reloadData();
 }
 
@@ -734,7 +741,9 @@ loginForm?.addEventListener('submit', async (e) => {
     const session = await establishSession(data, email, password);
     if (!session) {
       alert('ログインに失敗しました: セッションを取得できませんでした。');
+      return;
     }
+    await onAuthenticated(session);
   } catch (err) {
     alert(`ログインに失敗しました: ${err.message}`);
   }
@@ -765,7 +774,9 @@ signupForm?.addEventListener('submit', async (e) => {
     const session = await establishSession(data, email, password);
     if (!session) {
       alert('新規登録に失敗しました: セッションを取得できませんでした。');
+      return;
     }
+    await onAuthenticated(session);
   } catch (err) {
     alert(`新規登録に失敗しました: ${err.message}`);
   }
