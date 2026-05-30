@@ -635,18 +635,29 @@ async function loadEntries() {
     return;
   }
   currentUserId = user.id;
-  const [teRes, bdRes] = await Promise.all([
-    supabase
-      .from('thought_entries')
-      .select('*')
-      .eq('user_id', user.id)
-      .order('created_at', { ascending: false }),
-    supabase
-      .from('brain_dumps')
-      .select('*')
-      .eq('user_id', user.id)
-      .order('created_at', { ascending: false }),
-  ]);
+  let teRes;
+  let bdRes;
+  try {
+    [teRes, bdRes] = await runWithDeadline(20000, () =>
+      Promise.all([
+        supabase
+          .from('thought_entries')
+          .select('*')
+          .eq('user_id', user.id)
+          .order('created_at', { ascending: false }),
+        supabase
+          .from('brain_dumps')
+          .select('*')
+          .eq('user_id', user.id)
+          .order('created_at', { ascending: false }),
+      ])
+    );
+  } catch (err) {
+    const normalized = normalizeSaveError(err);
+    listStatus.textContent = `一覧取得に失敗: ${normalized.message}`;
+    showToast(`一覧取得に失敗: ${normalized.message}`, 'err');
+    return;
+  }
   if (teRes.error) {
     const hint = userIdMigrationHint('thought_entries', teRes.error);
     listStatus.textContent = `一覧取得に失敗: ${teRes.error.message}`;
@@ -671,8 +682,8 @@ async function loadEntries() {
 }
 
 async function reloadData() {
-  await loadCategories();
-  await loadEntries();
+  listStatus.textContent = '読み込み中…';
+  await Promise.all([loadCategories(), loadEntries()]);
 }
 
 form.addEventListener('submit', async (e) => {
@@ -806,7 +817,11 @@ async function onAuthenticated(session) {
     currentUserId = session.user.id;
     showAppView(session);
     await testSupabaseConnection();
-    reloadData().catch((err) => console.error(err));
+    reloadData().catch((err) => {
+      console.error(err);
+      listStatus.textContent = `一覧取得に失敗: ${err.message}`;
+      showToast(`一覧取得に失敗: ${err.message}`, 'err');
+    });
     return;
   }
   const { user, error } = await requireAuthUser();
@@ -817,7 +832,11 @@ async function onAuthenticated(session) {
   currentUserId = user.id;
   showAppView({ user });
   await testSupabaseConnection();
-  reloadData().catch((err) => console.error(err));
+  reloadData().catch((err) => {
+    console.error(err);
+    listStatus.textContent = `一覧取得に失敗: ${err.message}`;
+    showToast(`一覧取得に失敗: ${err.message}`, 'err');
+  });
 }
 
 loginForm?.addEventListener('submit', async (e) => {
