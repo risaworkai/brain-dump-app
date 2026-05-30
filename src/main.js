@@ -59,7 +59,7 @@ async function bootSupabase() {
   ]);
   if (!url || !key) return { supabase: null, url, key };
   const fetchWithTimeout = (input, init = {}) => {
-    const ms = 12000;
+    const ms = 8000;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), ms);
     return fetch(input, { ...init, signal: controller.signal }).finally(() => clearTimeout(timer));
@@ -93,21 +93,16 @@ async function requireAuthUser() {
   if (authSessionCache?.user) {
     return { user: authSessionCache.user, session: authSessionCache, error: null };
   }
-  for (let i = 0; i < 3; i++) {
-    const { data: { session }, error: sessionErr } = await supabase.auth.getSession();
-    if (sessionErr) return { user: null, session: null, error: sessionErr };
-    if (session?.user) {
-      authSessionCache = session;
-      return { user: session.user, session, error: null };
-    }
-    if (i < 2) await new Promise((r) => setTimeout(r, 200));
+  const { data: { session }, error: sessionErr } = await supabase.auth.getSession();
+  if (sessionErr) return { user: null, session: null, error: sessionErr };
+  if (session?.user) {
+    authSessionCache = session;
+    return { user: session.user, session, error: null };
   }
-  const { data: { user }, error: userErr } = await supabase.auth.getUser();
-  if (!userErr && user) return { user, session: authSessionCache, error: null };
   return {
     user: null,
     session: null,
-    error: userErr || new Error('ログインセッションがありません。ログアウトして再ログインしてください。'),
+    error: new Error('ログインセッションがありません。ログアウトして再ログインしてください。'),
   };
 }
 
@@ -194,17 +189,31 @@ function dbErrorHint(table, error) {
   return hint;
 }
 
-/** INSERT 前にセッションを更新し、RLS 拒否時は1回リトライ */
+function showExtensionBlockHint() {
+  envWarning.classList.remove('hidden');
+  envWarning.innerHTML =
+    '<strong>保存が通信エラーで止まる場合</strong><br>' +
+    'ブラウザ拡張（広告ブロック・DeepL 等）が Supabase をブロックしている可能性があります。<br>' +
+    '対処: <strong>Ctrl+Shift+N</strong> のシークレットウィンドウで開く、または拡張機能をこのサイトでオフにしてください。';
+}
+
+function normalizeSaveError(error) {
+  if (!error) return error;
+  if (error.name === 'AbortError' || /abort|failed to fetch|network/i.test(error.message || '')) {
+    showExtensionBlockHint();
+    return {
+      message:
+        'Supabase への接続がブロックされました。シークレットウィンドウ（Ctrl+Shift+N）で開くか、拡張機能をオフにしてください。',
+    };
+  }
+  return error;
+}
+
+/** INSERT（RLS 対応） */
 async function insertThoughtEntry(payload, userId) {
   const row = { ...payload, user_id: userId };
-  let { error } = await supabase.from('thought_entries').insert(row);
-  if (error && /row-level security|violates.*policy/i.test(error.message)) {
-    ({ error } = await supabase.from('thought_entries').insert(row));
-  }
-  if (error?.name === 'AbortError' || /abort/i.test(error?.message || '')) {
-    error = { message: 'Supabase への接続がタイムアウトしました。ネットワークまたは広告ブロックを確認してください。' };
-  }
-  return { error };
+  const { error } = await supabase.from('thought_entries').insert(row);
+  return { error: normalizeSaveError(error) };
 }
 
 let currentUserId = null;
@@ -690,8 +699,9 @@ form.addEventListener('submit', async (e) => {
     }
   } catch (err) {
     console.error(err);
-    showToast(`保存に失敗: ${err.message}`, 'err');
-    listStatus.textContent = `保存に失敗: ${err.message}`;
+    const normalized = normalizeSaveError(err);
+    showToast(`保存に失敗: ${normalized.message}`, 'err');
+    listStatus.textContent = `保存に失敗: ${normalized.message}`;
   } finally {
     submitBtn.disabled = false;
     submitBtn.textContent = editIdInput.value.trim() ? '更新する' : '保存（新規）';
