@@ -82,21 +82,23 @@ async function establishSession(authData, email, password) {
 
 /** 保存・一覧前にセッション付きユーザーを取得（RLS 用 JWT 必須） */
 async function requireAuthUser() {
-  if (!supabase) return { user: null, error: new Error('Supabase に未接続') };
+  if (!supabase) return { user: null, session: null, error: new Error('Supabase に未接続') };
   const { data: { session }, error: sessionErr } = await supabase.auth.getSession();
-  if (sessionErr) return { user: null, error: sessionErr };
-  if (session?.user) return { user: session.user, session, error: null };
+  if (sessionErr) return { user: null, session: null, error: sessionErr };
+  if (session?.access_token && session.user) {
+    return { user: session.user, session, error: null };
+  }
   if (session?.refresh_token) {
     const { data: refreshed, error: refreshErr } = await supabase.auth.refreshSession();
-    if (!refreshErr && refreshed.session?.user) {
+    if (!refreshErr && refreshed.session?.access_token && refreshed.session.user) {
       return { user: refreshed.session.user, session: refreshed.session, error: null };
     }
   }
-  const { data: { user }, error: userErr } = await supabase.auth.getUser();
-  if (userErr || !user) {
-    return { user: null, error: userErr || new Error('ログインが必要です') };
-  }
-  return { user, session: null, error: null };
+  return {
+    user: null,
+    session: null,
+    error: new Error('ログインセッションがありません。ログアウトして再ログインしてください。'),
+  };
 }
 
 const THEME_STORAGE_KEY = 'brain-dump-theme';
@@ -172,7 +174,7 @@ function dbErrorHint(table, error) {
   let hint = userIdMigrationHint(table, error);
   if (!hint && /row-level security|violates.*policy/i.test(error?.message || '')) {
     hint =
-      ' ログイン中のユーザーで保存してください。新規登録直後はログアウト→再ログイン、または Ctrl+Shift+R で再読み込みしてください。';
+      ' Supabase で docs/20260530_06_user_id_insert_trigger.sql を実行し、ログアウト→再ログインしてください。';
   }
   return hint;
 }
@@ -632,18 +634,9 @@ form.addEventListener('submit', async (e) => {
       .eq('id', id)
       .eq('user_id', currentUserId));
   } else {
-    const { data: inserted, error: insertError } = await supabase
+    ({ error } = await supabase
       .from('thought_entries')
-      .insert({ ...payload, user_id: user.id })
-      .select('id, user_id')
-      .single();
-    error = insertError;
-    if (!error && inserted?.user_id !== user.id) {
-      error = {
-        message:
-          'user_id が保存されませんでした。Ctrl+Shift+R で再読み込みするか、GitHub Pages を使っている場合は最新版を push してください。',
-      };
-    }
+      .insert({ ...payload, user_id: user.id }));
   }
   submitBtn.disabled = false;
   if (error) {
