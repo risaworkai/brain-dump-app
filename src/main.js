@@ -1,30 +1,3 @@
-const THEME_STORAGE_KEY = 'brain-dump-theme';
-
-function applyTheme(theme) {
-  const next = theme === 'light' ? 'light' : 'dark';
-  document.documentElement.setAttribute('data-theme', next);
-  localStorage.setItem(THEME_STORAGE_KEY, next);
-}
-
-function initTheme() {
-  const select = document.getElementById('theme-select');
-  const stored = localStorage.getItem(THEME_STORAGE_KEY);
-  const theme = stored === 'light' ? 'light' : 'dark';
-  applyTheme(theme);
-  if (!select) return;
-  select.value = theme;
-  select.addEventListener('change', () => applyTheme(select.value));
-}
-
-initTheme();
-
-const RECORD_LABELS = {
-  idea: '思いつき',
-  ai_consult: 'AI相談',
-  prompt: 'プロンプト',
-  learning: '学習メモ',
-};
-
 function isViteEnv() {
   try {
     const e = import.meta?.env;
@@ -35,6 +8,9 @@ function isViteEnv() {
 }
 
 async function loadCreateClient() {
+  if (window.supabase?.createClient) {
+    return window.supabase.createClient.bind(window.supabase);
+  }
   if (isViteEnv()) {
     const { createClient } = await import('@supabase/supabase-js');
     return createClient;
@@ -62,10 +38,7 @@ async function getSupabaseCredentials() {
     const k = String(e?.VITE_SUPABASE_ANON_KEY || '').trim();
     if (u && k) return { url: u, key: k };
   }
-  const sources = [
-    new URL('../env.js', import.meta.url).href,
-    '/env.js',
-  ];
+  const sources = [new URL('../env.js', import.meta.url).href, '/env.js'];
   for (const href of sources) {
     try {
       const m = await import(/* @vite-ignore */ href);
@@ -79,9 +52,60 @@ async function getSupabaseCredentials() {
   return { url: '', key: '' };
 }
 
-let url = '';
-let key = '';
-let createClient = null;
+async function bootSupabase() {
+  const [{ url, key }, createClient] = await Promise.all([
+    getSupabaseCredentials(),
+    loadCreateClient(),
+  ]);
+  if (!url || !key) return { supabase: null, url, key };
+  return {
+    supabase: createClient(url, key, {
+      auth: {
+        persistSession: true,
+        autoRefreshToken: true,
+        detectSessionInUrl: false,
+      },
+    }),
+    url,
+    key,
+  };
+}
+
+async function establishSession(authData, email, password) {
+  if (authData?.session) return authData.session;
+  const { data: { session: cached } } = await supabase.auth.getSession();
+  if (cached) return cached;
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+  if (error) throw error;
+  return data.session;
+}
+
+const THEME_STORAGE_KEY = 'brain-dump-theme';
+
+function applyTheme(theme) {
+  const next = theme === 'light' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', next);
+  localStorage.setItem(THEME_STORAGE_KEY, next);
+}
+
+function initTheme() {
+  const select = document.getElementById('theme-select');
+  const stored = localStorage.getItem(THEME_STORAGE_KEY);
+  const theme = stored === 'light' ? 'light' : 'dark';
+  applyTheme(theme);
+  if (!select) return;
+  select.value = theme;
+  select.addEventListener('change', () => applyTheme(select.value));
+}
+
+initTheme();
+
+const RECORD_LABELS = {
+  idea: '思いつき',
+  ai_consult: 'AI相談',
+  prompt: 'プロンプト',
+  learning: '学習メモ',
+};
 
 const envWarning = document.getElementById('env-warning');
 const toastEl = document.getElementById('toast');
@@ -102,6 +126,14 @@ const filterTypeEl = document.getElementById('filter-type');
 const filterQEl = document.getElementById('filter-q');
 const listStatus = document.getElementById('list-status');
 const entryList = document.getElementById('entry-list');
+const userEmailEl = document.getElementById('user-email');
+const logoutBtn = document.getElementById('logout-btn');
+const authSection = document.getElementById('auth-section');
+const appMain = document.getElementById('app-main');
+const loginForm = document.getElementById('login-form');
+const signupForm = document.getElementById('signup-form');
+const loginBtn = document.getElementById('login-btn');
+const signupBtn = document.getElementById('signup-btn');
 
 let supabase = null;
 let entriesCache = [];
@@ -394,7 +426,7 @@ function renderList(rows) {
     when.textContent = `登録: ${formatDate(row.created_at)}`;
     meta.append(badge, when);
     const due = getRowDueDate(row);
-    if (due) {
+    if (due && entryTable(row) === 'thought_entries') {
       const dueBadge = document.createElement('span');
       dueBadge.className = 'badge badge--due' + (isDuePast(due) ? ' badge--due-past' : '');
       dueBadge.textContent = `期限: ${formatDueDate(due)}`;
@@ -539,7 +571,119 @@ refreshBtn.addEventListener('click', () => reloadData());
 filterTypeEl.addEventListener('change', () => renderList(entriesCache));
 filterQEl.addEventListener('input', () => renderList(entriesCache));
 
-function init() {
+function validateAuthPassword(password) {
+  if (password.length < 6) {
+    alert('パスワードは6文字以上で入力してください。');
+    return false;
+  }
+  return true;
+}
+
+function validateAuthEmail(email) {
+  const v = email.trim();
+  if (!v || !v.includes('@')) {
+    alert('メールアドレスを正しく入力してください。');
+    return false;
+  }
+  return true;
+}
+
+function showAuthView() {
+  authSection?.classList.remove('hidden');
+  appMain?.classList.add('hidden');
+  userEmailEl?.classList.add('hidden');
+  logoutBtn?.classList.add('hidden');
+  if (userEmailEl) userEmailEl.textContent = '';
+}
+
+function showAppView(session) {
+  authSection?.classList.add('hidden');
+  appMain?.classList.remove('hidden');
+  userEmailEl?.classList.remove('hidden');
+  logoutBtn?.classList.remove('hidden');
+  if (userEmailEl) userEmailEl.textContent = session?.user?.email || '';
+}
+
+async function onAuthenticated(session) {
+  showAppView(session);
+  await reloadData();
+}
+
+loginForm?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  if (!supabase) {
+    alert('Supabase に接続できません。env.js を確認するか、起動.bat で開いてください。');
+    return;
+  }
+  const email = document.getElementById('login-email').value.trim();
+  const password = document.getElementById('login-password').value;
+  if (!validateAuthEmail(email) || !validateAuthPassword(password)) return;
+
+  loginBtn.disabled = true;
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+  loginBtn.disabled = false;
+  if (error) {
+    alert(`ログインに失敗しました: ${error.message}`);
+    return;
+  }
+  loginForm.reset();
+  try {
+    const session = await establishSession(data, email, password);
+    if (!session) {
+      alert('ログインに失敗しました: セッションを取得できませんでした。');
+      return;
+    }
+    await onAuthenticated(session);
+  } catch (err) {
+    alert(`ログインに失敗しました: ${err.message}`);
+  }
+});
+
+signupForm?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  if (!supabase) {
+    alert('Supabase に接続できません。env.js を確認するか、起動.bat で開いてください。');
+    return;
+  }
+  const email = document.getElementById('signup-email').value.trim();
+  const password = document.getElementById('signup-password').value;
+  if (!validateAuthEmail(email) || !validateAuthPassword(password)) return;
+
+  signupBtn.disabled = true;
+  const { data, error } = await supabase.auth.signUp({ email, password });
+  signupBtn.disabled = false;
+  if (error) {
+    const msg = /already registered|already exists|user_already_exists/i.test(error.message)
+      ? 'このメールアドレスは既に登録されています。左のログインフォームからログインしてください。'
+      : `新規登録に失敗しました: ${error.message}`;
+    alert(msg);
+    return;
+  }
+  signupForm.reset();
+  try {
+    const session = await establishSession(data, email, password);
+    if (!session) {
+      alert('新規登録に失敗しました: セッションを取得できませんでした。');
+      return;
+    }
+    await onAuthenticated(session);
+  } catch (err) {
+    alert(`新規登録に失敗しました: ${err.message}`);
+  }
+});
+
+logoutBtn?.addEventListener('click', async () => {
+  if (!supabase) return;
+  const { error } = await supabase.auth.signOut();
+  if (error) {
+    alert(`ログアウトに失敗しました: ${error.message}`);
+    return;
+  }
+  showAuthView();
+});
+
+async function init() {
+  const { supabase: client, url, key } = await bootSupabase();
   if (!url || !key) {
     envWarning.classList.remove('hidden');
     envWarning.innerHTML =
@@ -548,23 +692,19 @@ function init() {
       'GitHub Pages: リポジトリに <code>env.js</code> があるか確認（<code>公開用-env更新.bat</code> → push）<br>' +
       '<small>index 直開き・GitHub の URL では <code>env.js</code> が必要です。</small>';
     listStatus.textContent = 'Supabase に接続できません。';
+    showAuthView();
     return;
   }
   envWarning.classList.add('hidden');
-  supabase = createClient(url, key);
-  reloadData();
+  supabase = client;
+  const { data: { session } } = await supabase.auth.getSession();
+  if (session) await onAuthenticated(session);
+  else showAuthView();
 }
 
 async function boot() {
   try {
-    const [{ url: u, key: k }, clientFactory] = await Promise.all([
-      getSupabaseCredentials(),
-      loadCreateClient(),
-    ]);
-    url = u;
-    key = k;
-    createClient = clientFactory;
-    init();
+    await init();
   } catch (err) {
     console.error(err);
     envWarning.classList.remove('hidden');
